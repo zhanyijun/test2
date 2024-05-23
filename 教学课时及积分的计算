@@ -1,0 +1,568 @@
+import pandas as pd
+import numpy as np
+import openpyxl as xl
+import datetime as dti
+
+# -----------------------------导出表格---------------------------------
+class LoadData:
+    def __init__(self):
+        self.path1 = r'H:\3、理论教学\1、各类总表\1、各总表-python\1、截止2023.12科室人员花名册.xls'
+        self.path3_1 = r'H:\3、理论教学\1、各类总表\1、各总表-python\3-1、教研室主任秘书.xlsx'
+        self.path3_2 = r'H:\3、理论教学\1、各类总表\1、各总表-python\3-2、课程对应教研室.xlsx'
+        self.path5_1 = r'H:\3、理论教学\1、各类总表\1、各总表-python\5-1、OA导出教学进度表.xlsx'
+        self.path5_2 = r'H:\3、理论教学\1、各类总表\1、各总表-python\5-2、审核的外聘课时.xlsx'
+        self.path6=r'H:\3、理论教学\1、各类总表\1、各总表-python\6、学校外聘课时发放.xlsx'
+        self.path7 = r'H:\3、理论教学\1、各类总表\1、各总表-python\7、录入教学积分.xlsx'
+        self.path8=r'H:\3、理论教学\1、各类总表\1、各总表-python\8、关联科室-年终汇报.xlsx'
+        self.path9_0 = r'H:\3、理论教学\1、各类总表\1、各总表-python\9-0、晋升-周期表.xlsx'
+        self.path9_1 = r'H:\3、理论教学\1、各类总表\1、各总表-python\9-1、晋升-金课录入.xlsx'
+        self.path9_2 = r'H:\3、理论教学\1、各类总表\1、各总表-python\9-2、晋升-继续医学教育录入.xlsx'
+        self.path9_3 = r'H:\3、理论教学\1、各类总表\1、各总表-python\9-3、评先评优.xlsx'
+        self.path9_4 = r'H:\3、理论教学\1、各类总表\1、各总表-python\9-4、竞赛获奖.xlsx'
+        self.path9_5 = r'H:\3、理论教学\1、各类总表\1、各总表-python\9-5、晋升-分年度汇总.xlsx'
+        self.path9_6=r'H:\3、理论教学\1、各类总表\1、各总表-python\9-6、晋升名单及晋级要求及结果统计.xlsx'
+        self.path0_1 = r'H:\3、理论教学\1、各类总表\1、各总表-python\0_1、教学积分汇总.xlsx'
+        self.path0_2 = r'H:\3、理论教学\1、各类总表\1、各总表-python\0_2、晋升-（詹忆君统计）理论教学总分汇总.xlsx'
+        self.path0_3=r'H:\3、理论教学\1、各类总表\1、各总表-python\0_3、个人课时及得分汇总.xlsx'
+
+    def load_data(self,path,sheet):
+        df=pd.read_excel(path,sheet_name=sheet)
+        return df
+
+# -----------------------------------积分计算-------------------------------------
+class ScoreCalculator(LoadData):
+    def __init__(self):
+        super().__init__()
+
+    # --------------------------------计算课时积分---------------------------------
+    def class_score(self,path, base_number, extend=''):
+        df = self.load_data(path, 0).fillna(0)
+        df[['理论', '实验', '见习']] = df[['理论', '实验', '见习']].astype('float')
+        # print(df)
+        # 先聚合学时数，再计算积分
+        df = df.groupby(['批次', '学期', '姓名', '课程'])[['理论', '实验', '见习']].agg('sum').reset_index()
+        df['积分'] = df['理论'] * base_number + df['实验'] * base_number / 2 + df['见习'] * base_number / 2
+        df['积分'] = df['积分'].astype('float')
+        # 形成明细项目
+        df['理论_t'] = np.where(df['理论'] > 0, "理论课" + df['理论'].astype(str) + "学时", "")
+        df['实验_t'] = np.where(df['实验'] > 0, "实验课" + df['实验'].astype(str) + "学时", "")
+        df['见习_t'] = np.where(df['见习'] > 0, "见习课" + df['见习'].astype(str) + "学时", "")
+        df['课时合并_t'] = df['理论_t'] + df['实验_t'] + df['见习_t']
+        df['明细'] = df['学期'] + '《' + df['课程'] + '》' + df['课时合并_t'] + extend
+        df['项目'] = '课时积分'
+        # print(f'--------------------------输出课时积分{extend}---------------------')
+        # print(df)
+        return df
+
+    # -----------------------------------计算管理积分-----------------------------------
+    # 先确认3_2表中是否有课程还没有归入对应教研室
+    def course_check(self):
+        df_oa_score = self.class_score(self.path5_1, 20)
+        df_course = self.load_data(self.path3_2, 0)
+        df_oa_score = df_oa_score.merge(df_course[['课程', '教研室']], on='课程', how='left')
+        # 如果表3-2中，有课程还没有归入教研室，必须归入后再运行程序
+        return df_oa_score
+    # 开始计算管理积分
+    def management_score(self):
+        df_oa_score = self.course_check()
+        df_teaching_section_duties = self.load_data(self.path3_1, 0)
+        # 对教研室获得的积分进行汇总
+        df_teaching_section_score = df_oa_score.groupby(['批次', '学期', '教研室'])['积分'].agg('sum').reset_index()
+        df_teaching_section_score = df_teaching_section_score.rename(columns={'积分': '课时积分合计'})
+        # 按教研室查询积分，再根据系数计算个人的管理积分
+        df = df_teaching_section_duties.merge(df_teaching_section_score, on=['批次', '教研室'], how='left')
+        df['积分'] = (df['课时积分合计'] * df['管理积分系数']).fillna(0)
+        # 格式调整
+        df['项目'] = '理论教学管理积分'
+        df['明细'] = df['学期'] + df['教研室'] + '对应课程课时积分*' + df['管理积分系数'].astype(str)
+        df = df[df['明细'].notna()]
+        df['积分'] = df['积分'].astype('float')
+        # print('---------------------------输出管理积分---------------------')
+        # print(df)
+        return df
+
+    # -----------------------------------计算所有积分------------------------------------
+    def all_score(self):
+        list = ['批次', '姓名', '项目', '明细', '积分']
+        df_score_enter = self.load_data(self.path7, 0)[list]
+        df_oa_score = self.class_score(self.path5_1, 20)[list]
+        df_outside_score = self.class_score(self.path5_2, 10, '-(外聘)')[list]
+        df_management_scor = self.management_score()[list]
+        # 拼接三表
+        df = pd.concat([df_score_enter, df_oa_score, df_outside_score, df_management_scor])
+        df = df.reset_index()
+        # print('---------------------------输出全部积分---------------------')
+        # print(df)
+        return df
+
+# -----------------------------计算晋升教学总分-------------------------------------------
+class PromoteScore(ScoreCalculator):
+    def __init__(self):
+        super().__init__()
+
+    # -----------------------晋升：理论课时、管理积分及录入教学积分部分-----------------------
+    def score_convert(self):
+        df = self.all_score()
+        df['教学总分'] = np.where(
+            ((df['项目'] == '课时积分') | (df['项目'] == '理论教学管理积分') | (df['项目'] == '教学差错事故')), df['积分'] * 2,
+            df['积分'])
+        df_period=self.load_data(self.path9_0,0)
+        # df_period = self.load_data(self.path9_0, 0)
+        df = df.merge(df_period, on='批次', how='left')
+        df = df[['批次', '学年', '人事晋升周期', '姓名', '项目', '明细', '教学总分']]
+        return df
+
+    # -----------------------晋升：金课的教学总分部分-----------------------
+    def golden_course(self):
+        df=self.load_data(self.path9_1,0)
+        df_period = self.load_data(self.path9_0, 0)
+        df = df.merge(df_period, on='年度', how='left')
+        df['项目'] = '一流本科课程'
+        df['批次'] = ''
+        df['学年'] = ''
+        df['明细'] = df['年度'] + df['级别']+df['项目类别']+'《'+df['项目名称']+'》'+'排名第'+df['排名'].astype('str')
+        df['教学总分'] = np.where((df['级别']=='院级') & (df['排名']==1),400,
+                    np.where((df['级别']=='院级') & (df['排名']==2), 200,
+                    np.where((df['级别']=='院级') & (df['排名']==3), 100,
+                    np.where((df['级别']=='院级') & (df['排名']==4), 50,
+                    np.where((df['级别']=='校级') & (df['排名']==1),600,
+                    np.where((df['级别']=='校级') & (df['排名']==2), 300,
+                    np.where((df['级别']=='校级') & (df['排名']==3), 200,
+                    np.where((df['级别']=='校级') & (df['排名']==4), 100,
+                    np.where((df['级别'] == '地市厅级') & (df['排名'] == 1), 1000,
+                    np.where((df['级别'] == '地市厅级') & (df['排名'] == 2), 500,
+                    np.where((df['级别'] == '地市厅级') & (df['排名'] == 3), 300,
+                    np.where((df['级别'] == '地市厅级') & (df['排名'] == 4), 200,
+                    np.where((df['级别'] == '省部级') & (df['排名'] == 1), 2000,
+                    np.where((df['级别'] == '省部级') & (df['排名'] == 2), 1000,
+                    np.where((df['级别'] == '省部级') & (df['排名'] == 3), 500,
+                    np.where((df['级别'] == '省部级') & (df['排名'] == 4),300,
+                    np.where((df['级别'] == '国家级') & (df['排名'] == 1), 3000,
+                    np.where((df['级别'] == '国家级') & (df['排名'] == 2), 1500,
+                    np.where((df['级别'] == '国家级') & (df['排名'] == 3), 1000,
+                    np.where((df['级别'] == '国家级') & (df['排名'] == 4),1500,
+                             0))))))))))))))))))))
+        df=df[['批次','学年','人事晋升周期','姓名','项目','明细','教学总分']]
+        df=df[df['教学总分']>0]
+        return df
+
+# -----------------------晋升：继续医学教育的教学总分-----------------------
+    def continue_education(self):
+        df=self.load_data(self.path9_2,0)
+        df['批次']=''
+        df['学年'] = ''
+        df['明细']=df['明细']+'('+df['级别']+')'+'--'+df['身份']
+        df=df[['批次','学年','人事晋升周期','姓名','项目','明细','教学总分']]
+        return df
+
+    # -----------------------晋升：竞赛获奖的教学总分-----------------------
+    def competition_award(self):
+        df=self.load_data(self.path9_4,0)
+        df_period = self.load_data(self.path9_0, 0)
+        df=df.merge(df_period,on='学年',how='left')
+        df['项目']='教学奖励'
+        df['批次'] = ''
+        df['明细']=df['学年']+df['主办单位']+df['明细']
+        df['教学总分']=np.where((df['奖级']=='院级') & (df['奖次辅助列']==1),400,
+                    np.where((df['奖级'] == '院级') & (df['奖次辅助列'] == 2), 300,
+                    np.where((df['奖级'] == '院级') & (df['奖次辅助列'] == 3), 200,
+                    np.where((df['奖级'] == '院级') & (df['奖次辅助列'] == '优秀'), 100,
+                    np.where((df['奖级'] == '校级') & (df['奖次辅助列'] == 1), 600,
+                    np.where((df['奖级'] == '校级') & (df['奖次辅助列'] == 2), 500,
+                    np.where((df['奖级'] == '校级') & (df['奖次辅助列'] == 3), 400,
+                    np.where((df['奖级'] == '校级') & (df['奖次辅助列'] == '优秀'), 200,
+                    np.where((df['奖级'] == '地市厅级') & (df['奖次辅助列'] == 1), 1000,
+                    np.where((df['奖级'] == '地市厅级') & (df['奖次辅助列'] == 2), 800,
+                    np.where((df['奖级'] == '地市厅级') & (df['奖次辅助列'] == 3), 600,
+                    np.where((df['奖级'] == '地市厅级') & (df['奖次辅助列'] == '优秀'), 400,
+                    np.where((df['奖级'] == '省部级') & (df['奖次辅助列'] == 1), 2000,
+                    np.where((df['奖级'] == '省部级') & (df['奖次辅助列'] == 2), 1500,
+                    np.where((df['奖级'] == '省部级') & (df['奖次辅助列'] == 3), 1000,
+                    np.where((df['奖级'] == '省部级') & (df['奖次辅助列'] == '优秀'),600,
+                    np.where((df['奖级'] == '国家级') & (df['奖次辅助列'] == 1), 3000,
+                    np.where((df['奖级'] == '国家级') & (df['奖次辅助列'] == 2), 2000,
+                    np.where((df['奖级'] == '国家级') & (df['奖次辅助列'] == 3), 1500,
+                    np.where((df['奖级'] == '国家级') & (df['奖次辅助列'] == '优秀'),1000,
+                             0))))))))))))))))))))
+        df=df[['批次','学年','人事晋升周期','姓名','项目','明细','教学总分']]
+        return df
+
+    # -----------------------------晋升：评优评先的教学总分-----------------------------
+    def appraising(self):
+        df=self.load_data(self.path9_3,0)
+        df_period = self.load_data(self.path9_0, 0)
+        df=df.merge(df_period,on='学年',how='left')
+        df=df[df['类别']!='实习']
+        df['项目']='评优评先'
+        df['明细']=df['学年']+df['颁奖单位']+df['明细']
+        df['教学总分']=np.where(df['奖级']=='院级',100,
+                    np.where(df['奖级'] == '校级', 200,
+                    np.where(df['奖级'] == '地市厅级', 300,
+                    np.where(df['奖级'] == '省部级', 600,
+                    np.where(df['奖级'] == '国家级', 2000,
+                    0)))))
+        df = df[['批次', '学年', '人事晋升周期', '姓名', '项目', '明细', '教学总分']]
+        return df
+
+    # -----------------------------晋升：全部教学总分汇总-----------------------------
+    def promote_score(self):
+        list1 = ['人事晋升周期', '姓名', '职工编码', '人事关系所在科室', '专业类别', '项目', '明细', '教学总分']
+        df = pd.concat([self.score_convert(), self.golden_course(),self.competition_award(), self.continue_education(), self.appraising()])
+        df_roster = self.load_data(self.path1, 0)
+        df = df.merge(df_roster[['姓名', '职工编码', '人事关系所在科室', '专业类别']], on='姓名', how='left')
+        df = df[(df['职工编码'].notna()) & (df['人事晋升周期'].notna()) & (df['教学总分'] != 0)]
+        df = df[list1]
+        return(df)
+
+# -------------------------------------计算学时-----------------------------------------
+class ClassHourCalculator(LoadData):
+    def __init__(self):
+        super().__init__()
+
+    # -------------------------------计算外聘学时-------------------------------------
+    def all_hour(self):
+        df_school_hour=self.load_data(self.path6,0).fillna(0)
+        df_oa_hour=self.load_data(self.path5_1,0).fillna(0)
+        df_oa_split=df_oa_hour[df_oa_hour['补贴发放单位']=='学校']
+        df_oa_split=df_oa_split[['批次','姓名','理论','实验','见习']]
+        df_school_hour=df_school_hour[['批次','姓名','理论','实验','见习']]
+        df_oa_split=df_oa_split.groupby(['批次','姓名'])[['理论','实验','见习']].agg('sum').reset_index()
+        df_school_hour = df_school_hour.groupby(['批次','姓名'])[['理论','实验','见习']].agg('sum').reset_index()
+        df_oa_split['总学时']=df_oa_split['理论']+df_oa_split['实验']+df_oa_split['见习']
+        df_school_hour['总学时']=df_school_hour['理论']+df_school_hour['实验']+df_school_hour['见习']
+        # 合并查询。outer形式。空白值必须填充，否则未匹配到的“批次姓名”无法获得正确的差值
+        df_merge=df_school_hour.merge(df_oa_split,on=['批次','姓名'],how='outer',suffixes=('_校表','_OA表')).fillna(0)
+        # print(df_merge)
+        df_merge['差值']=df_merge['总学时_校表']-df_merge['总学时_OA表']
+        # 差值为“校表课时”与“OA表中校发补贴的课时”不一致的地方，正值为是外聘课时，负值为学校漏发（OA表中有，但校表没有）。
+        df_outside_hour = df_merge[df_merge['差值'] > 0]
+        df_miss=df_merge[df_merge['差值'] < 0].sort_values(by=['批次'])
+        # 全部课时=OA表课时+外聘课时
+        df_oa_hour['总学时']=df_oa_hour['理论']+df_oa_hour['实验']+df_oa_hour['见习']
+        df_outside_hour = df_outside_hour[['批次','姓名', '差值']].rename(columns={'差值': '总学时'})
+        df_all_hour=pd.concat([df_oa_hour[['批次','姓名','总学时']],df_outside_hour])#合并两表
+        # print(df_all_hour)
+        return [df_all_hour,df_miss]
+
+    # -------------------------------计算认定课时-------------------------------------
+    def review_hour(self):
+        list=['学期','姓名','课程','年级专业','理论','实验','见习','总学时']
+        # 认定课时=OA表课时+认定外聘
+        df_oa_hour = self.load_data(self.path5_1, 0).fillna(0)
+        df_oa_hour['总学时'] = df_oa_hour['理论'] + df_oa_hour['实验'] + df_oa_hour['见习']
+        df_oa_hour=df_oa_hour[list]
+        df_review_outside=self.load_data(self.path5_2,0).fillna(0)#导入经审核的外聘课时
+        df_review_outside['总学时']=df_review_outside['理论']+df_review_outside['实验']+df_review_outside['见习']
+        df_review_outside=df_review_outside[list]
+        df_review_hour=pd.concat([df_oa_hour,df_review_outside])#合并两表
+        df_review_hour=df_review_hour.groupby(['学期','姓名','课程','年级专业']).sum().reset_index()
+        # print(df_review_hour)
+        return df_review_hour
+
+    # -----------------------------输出数据---------------------------------
+class Output(PromoteScore,ClassHourCalculator):
+    def __init__(self):
+        super().__init__()
+
+    # ------------------------------输出积分汇总表----------------------------------
+    def output_excel_01(self):
+        list1 = ['批次', '姓名', '职工编码', '项目', '明细', '积分']
+        df_roster = self.load_data(self.path1, 0).dropna(axis=0, how='all').reset_index()
+        df = self.all_score()
+        df = df.merge(df_roster[['姓名', '职工编码']], on='姓名', how='left')
+        # 重新排序
+        df = df.reindex(columns=list1)
+        wb = xl.load_workbook(self.path0_1)
+        ws = wb.worksheets[0]
+        ws.delete_rows(2, ws.max_row)
+        # 将df_roster转换为类似元组的对象。
+        df_tuples = df.itertuples(index=False)
+        for row in df_tuples:
+            ws.append(list(row))
+        wb.save(self.path0_1)
+
+    # -----------------------------输出到excel表格0_2-----------------------------
+    def output_excel_02(self):
+        list1 = ['人事晋升周期', '姓名', '职工编码', '人事关系所在科室', '专业类别', '项目', '明细', '教学总分']
+        df = self.promote_score()
+        df_nurse = df[df['专业类别'] == '护理']
+        df_clinic = df[df['专业类别'] != '护理']
+        wb = xl.load_workbook(self.path0_2)
+        # ------------------------非护人员明细------------------
+        ws1 = wb.worksheets[0]
+        ws1.delete_rows(2, ws1.max_row)
+        # ws1.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df_clinic_tuples = df_clinic.itertuples(index=False)
+        for row in df_clinic_tuples:
+            ws1.append(list(row))
+        # ------------------------护理人员明细------------------
+        ws2 = wb.worksheets[1]
+        ws2.delete_rows(2, ws2.max_row)
+        # ws2.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df_nurse_tuples = df_nurse.itertuples(index=False)
+        for row in df_nurse_tuples:
+            ws2.append(list(row))
+        wb.save(self.path0_2)
+
+    # -----------------------输出全院所有人员的分年度汇总-----------------------
+    def promote_Annual_Summary(self):
+        # 思路：先对花名册进行整理，删除空行，然后按晋升周期进行扩展，有几个周期就扩展几遍，然后再把积分对应到相应的周期
+        df_roster = self.load_data(self.path1, 0)
+        df_roster=df_roster[['姓名','职工编码','专业类别']].dropna(how='all')
+        df_period=self.load_data(self.path9_0,0)
+        #获取人事晋升周期的列表，并将每个周期分配到花名册中。
+        period_values = df_period['人事晋升周期'].unique().tolist()#获取唯一值
+        lenth=len(period_values)
+        df_expanded = df_roster.loc[df_roster.index.repeat(lenth)].reset_index(drop=True)#有n个周期，就复制扩展n次
+        df_expanded['人事晋升周期'] = period_values * len(df_roster)#分配周期至新列
+        # 对詹忆君统计的积分进行分组汇总
+        df = self.promote_score()
+        df['项目2'] = np.where(df['项目'] == '继续医学教育', '继教得分（詹）', '理论教学得分')
+        df = df.pivot_table(values=['教学总分'], index=['姓名', '人事晋升周期'],
+                            columns=['项目2'], aggfunc=np.sum, fill_value=0).reset_index()
+        df.columns = ['姓名', '人事晋升周期', '理论教学得分', '继教得分（詹）']# 将双层列索引更改为单层列索引
+        #开始合并，得到线上表格的理论部分。
+        df_merge = df_expanded.merge(df, on=['人事晋升周期','姓名'], how='left')
+        # 按原序号进行排序，方便查看
+        df_merge['my_index']=df_merge.index
+        df_merge=df_merge.sort_values(by=['人事晋升周期','my_index']).fillna(0)
+        # 获取最新表1数据（其实这个步骤只是用于获取【'理论教学得分', '继教得分（詹）'】之外的数据）。【'理论教学得分', '继教得分（詹）'】是实时更新的。！点赞！！
+        df_all=self.load_data(self.path9_5,0)
+        df_all = df_all.replace(to_replace=r'\s+', value=None, regex=True)#有些人上传的数据有空格，予转为空值
+        df_all=df_all.fillna(0)
+        df_all=df_all[['人事晋升周期','职工编码','实习教学得分','继教得分（张）','住培得分','教科研得分']]
+        df_all=df_merge.merge(df_all,on=['人事晋升周期','职工编码'],how='left')
+        df_online=df_all[['人事晋升周期','姓名','职工编码','理论教学得分', '继教得分（詹）','实习教学得分','继教得分（张）','住培得分','教科研得分']]
+        # ---------------------------生成子表1-----------------------------------
+        # 生成线上填写表格。
+        # 线上表格填写完毕后，覆盖表9_5的第1个子表，重新运行，以更正线上填写的部分格式问题如空格等，且【'理论教学得分', '继教得分（詹）'】会实时更新。
+        # 可以用于生成除去护理的第2、3子表。
+        wb = xl.load_workbook(self.path9_5)
+        ws1 = wb.worksheets[0]
+        ws1.delete_rows(2, ws1.max_row)
+        # ws1.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df_online_tuples = df_online.itertuples(index=False)
+        for row in df_online_tuples:
+            ws1.append(list(row))
+        # ---------------------------生成子表2（也可用于挂网）-----------------------------------------
+        df_no_nurse=df_all[df_all['专业类别']!='护理']
+        df_no_nurse=df_no_nurse[['人事晋升周期','姓名','职工编码','理论教学得分', '继教得分（詹）','实习教学得分','继教得分（张）','住培得分','教科研得分']]
+        ws2 = wb.worksheets[1]
+        ws2.delete_rows(2, ws2.max_row)
+        # ws1.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df_no_nurse_tuples = df_no_nurse.itertuples(index=False)
+        for row in df_no_nurse_tuples:
+            ws2.append(list(row))
+        # ---------------------------生成子表3（用于挂网，今后年度多了，可能要用表2来挂网，否则太宽）-----------------------------------------
+        df_no_nurse['教学总分']=df_no_nurse['理论教学得分']+df_no_nurse['继教得分（詹）']+df_no_nurse['实习教学得分']+\
+                                df_no_nurse['继教得分（张）']+df_no_nurse['住培得分']+df_no_nurse['教科研得分']
+        df_pivot = df_no_nurse.pivot_table(values=['教学总分'],index=['姓名','职工编码'],columns=['人事晋升周期'],
+                                           aggfunc=np.sum, fill_value=0).reset_index()
+        df_pivot=df_pivot.sort_values(['职工编码'])
+        ws3 = wb.worksheets[2]
+        ws3.delete_rows(2, ws3.max_row)
+        # ws1.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df_pivot_tuples = df_pivot.itertuples(index=False)
+        for row in df_pivot_tuples:
+            ws3.append(list(row))
+        wb.save(self.path9_5)
+
+    # -----------------------输出学校可能漏发补贴的课时--------------------
+    def output_miss_hour(self):
+        df_all_hour, df_miss=self.all_hour()
+        # pd.set_option('display.max_rows', None)#可用于显示所有的行
+        print('\n\n===================   以下为学校可能漏发补贴的课时，请核对   ===================\n')
+        print(df_miss)
+
+    # -----------------------输出3_2核对结果--------------------
+    def output_course_check(self):
+        df=self.course_check()
+        df=df[['课程', '教研室']][df['教研室'].isna()]
+        if df.empty:
+            pass
+        else:
+            print('\n===================   以下课程无对应教研室，请到表3_2中核对   =====================\n')
+            print(df)
+
+    # -----------------------输出各学期课时汇总表-------------------------
+    def output_term_hour(self):
+        df_all_hour, df_miss=self.all_hour()
+        df_all_hour = df_all_hour.groupby('批次')['总学时'].agg('sum')
+        print('\n\n===================   以下为各学期对应的总课时量   ===================\n')
+        print(df_all_hour)
+
+    # -----------------------输出科室年承担学时总数（全部学时）-------------------------
+    def output_section_hour(self,batch1,batch2):
+        df_all_hour, df_miss = self.all_hour()
+        df_roster = self.load_data(self.path1, 0).dropna(axis=0, how='all').reset_index()
+        # 筛选出相应批次的数据
+        df = df_all_hour[(df_all_hour['批次'] == batch1) | (df_all_hour['批次'] == batch2)]
+        df=df.merge(df_roster[['姓名','人事关系所在科室','二级分科']],on='姓名',how='left')
+        # 呼吸病医院相关人员应细分为“二级分科”
+        df['科室']=np.where(df['人事关系所在科室'].str.contains('呼吸病医院'),df['二级分科'],df['人事关系所在科室'])
+        df_associated_section=self.load_data(self.path8,0).rename(columns={'花名册的科室（含二级分科）':'科室'})
+        df=df.merge(df_associated_section[['科室','对应考核表科室']],on='科室',how='left')
+        df['对应考核表科室']=df['对应考核表科室'].fillna('（外院或离职人员）')
+        df=df.groupby(['对应考核表科室'])['总学时'].agg('sum').reset_index()
+        total = df['总学时'].sum()
+        print('\n\n===================   以下为科室年承担学时总数（全部学时）   ===================\n')
+        print(df)
+        print(f'合计：{total}')
+
+    # ------------------------输出个人教学积分汇总------------------------------
+    def output_personal_score(self, name):
+        df=self.all_score().sort_values(['批次'])
+        df = df[df['姓名'] == name]
+        total=df['积分'].sum()
+        print('\n\n==================   以下为个人教学积分汇总   ===================\n')
+        print(df)
+        print(f'合计：{total}')
+
+    # ------------------------输出经认定的个人学时------------------------------
+    def output_personal_hour(self,name):
+        df=self.review_hour()
+        df=df[df['姓名']==name]
+        df[['理论','实验','见习','总学时']]=df[['理论','实验','见习','总学时']].astype('float')
+        df=df[['姓名','理论','实验','见习','总学时','学期','课程','年级专业']]
+        # 打印DataFrame并用表格形式对齐
+        print('\n\n===================   以下为经认定的个人课时汇总   ===================\n')
+        print(df)
+
+    # -----------------------输出经认定的个人课时汇总-------------------------
+    def outputExcel_personal(self,name):
+        # ------------------------------个人课时汇总
+        df1=self.review_hour()
+        df1=df1[df1['姓名']==name]
+        df1[['理论','实验','见习','总学时']]=df1[['理论','实验','见习','总学时']].astype('float')
+        df1=df1[['学期','姓名','课程','年级专业','理论','实验','见习','总学时']]
+        df1.loc[len(df1)] = ['', '', '', '', '', '', '汇总', df1['总学时'].sum()]
+        wb = xl.load_workbook(self.path0_3)
+        ws1 = wb.worksheets[0]
+        ws1.delete_rows(2, ws1.max_row)
+        # ws1.append(['学期','姓名','课程','年级专业','理论','实验','见习','总学时'])
+        # 将df_roster转换为类似元组的对象。
+        df1_tuples = df1.itertuples(index=False)
+        for row in df1_tuples:
+            ws1.append(list(row))
+        # -----------------------------个人教学积分汇总
+        df2=self.all_score().sort_values(['批次'])
+        df2 = df2[df2['姓名'] == name]
+        df2.loc[len(df2)] = ['', '', '', '', '汇总',  df2['积分'].sum()]
+        ws2 = wb.worksheets[1]
+        ws2.delete_rows(2, ws2.max_row)
+        # col_indices = df2.columns.tolist()
+        # ws2.append(col_indices)
+        # 将df_roster转换为类似元组的对象。
+        df2_tuples = df2.itertuples(index=False)
+        for row in df2_tuples:
+            ws2.append(list(row))
+        # -----------------------------晋升教学总分（詹忆君部分的明细）----------------------------------------
+        list1 = ['人事晋升周期', '姓名', '职工编码', '人事关系所在科室', '专业类别', '项目', '明细', '教学总分']
+        df3 = self.promote_score().sort_values(['人事晋升周期'])
+        df3 = df3[df3['姓名'] == name]
+        df3.loc[len(df3)] = ['', '','', '', '', '','汇总', df3['教学总分'].sum()]
+        ws3 = wb.worksheets[2]
+        ws3.delete_rows(2, ws3.max_row)
+        # ws3.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df3_tuples = df3.itertuples(index=False)
+        for row in df3_tuples:
+            ws3.append(list(row))
+        # -----------------------------晋升教学总分全汇总----------------------------------------
+        df4=pd.read_excel(self.path9_5,1)
+        df4['合计']=df4['理论教学得分']+df4['继教得分（詹）']+df4['实习教学得分']+df4['继教得分（张）']+df4['住培得分']+df4['教科研得分']
+        df4 = df4[df4['姓名'] == name]
+        df4.loc[len(df4)] = ['', '','', '', '', '','','','汇总', df4['合计'].sum()]
+        ws4 = wb.worksheets[3]
+        ws4.delete_rows(2, ws4.max_row)
+        # ws4.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df4_tuples = df4.itertuples(index=False)
+        for row in df4_tuples:
+            ws4.append(list(row))
+        wb.save(self.path0_3)
+
+    def outputExcel_promote_result(self):
+        df=self.load_data(self.path9_6,0)
+        df2=self.load_data(self.path9_6,1)
+        df_roster=self.load_data(self.path1,0)
+        df=df.merge(df_roster[['姓名','专业类别']],on='姓名',how='left')
+        # 晋大级，按大级显示职级，晋小级，按小级显示职级
+        df['当前职级']=np.where((df['拟晋职级']=='四级')| (df['拟晋职级']=='七级'),df['当前大级'],df['当前小级'])
+        # 显大级，按大级提取聘任时间，显小级，按大小级提取聘任时间
+        df['聘任时间']=np.where((df['拟晋职级']=='四级')| (df['拟晋职级']=='七级'),df['当前大级聘任时间'],df['当前小级聘任时间'])
+        # 提取年度
+        df['聘任时间']=df['聘任时间'].astype('datetime64[ns]')
+        df_not_in=df[df['聘任时间'].isna()]
+        print('\n\n===================   以下人员“当前职级的聘任时间”缺失，请核查   ===================\n')
+        print(df_not_in)
+        df=df[df['聘任时间'].notna()]
+        df['聘任年度']=df['聘任时间'].dt.year
+        df['应算年数']=dti.datetime.now().year-df['聘任年度']
+        df = df.merge(df2, on=['当前职级', '拟晋职级'], how='left')
+        df['所需分数']=np.where((df['专业类别']=='医技')|(df['专业类别']=='医疗'),df['达标分数'],0)
+        # 应算年数可能超出可计算范围（2019年），故处理
+        df_period=self.load_data(self.path9_0,0)
+        #获取人事晋升周期的列表，根据‘实算年数’生成相应晋升周期，然后查询相应得分，最后再汇总
+        period_values = sorted(df_period['人事晋升周期'].unique().tolist(),reverse=True)#获取唯一值，并降序排列
+        lenth=len(period_values)
+        df['实算年数']=np.where(df['应算年数']>=lenth,lenth,df['应算年数'])
+        # 对需要进行分数折算的情况进行处理
+        df=df[['姓名', '专业类别','当前职级', '拟晋职级', '聘任年度','实算年数', '所需分数']]
+        def expand_rows(row):
+            count = row['实算年数']
+            expanded_rows = pd.DataFrame({'姓名': [row['姓名']] * count,
+                                          '专业类别': [row['专业类别']] * count,
+                                          '当前职级': [row['当前职级']] * count,
+                                          '拟晋职级': [row['拟晋职级']] * count,
+                                          '聘任年度': [row['聘任年度']] * count,
+                                          '实算年数': [row['实算年数']] * count,
+                                          '所需分数': [row['所需分数']] * count,
+                                          '人事晋升周期': period_values[:count]})
+            return expanded_rows
+        # 使用apply方法对每行数据进行处理并合并结果
+        df = pd.concat(df.apply(expand_rows, axis=1).tolist(), ignore_index=True)
+        df_sum=self.load_data(self.path9_5,0)
+        df_sum = df_sum.replace(to_replace=r'\s+', value=None, regex=True)# 有些人上传的数据有空格，予转为空值
+        df_sum=df_sum.fillna(0)
+        df_sum['教学总分']=df_sum['理论教学得分']+df_sum['继教得分（詹）']+df_sum['实习教学得分']+df_sum['继教得分（张）']+df_sum['住培得分']+df_sum['教科研得分']
+        df_sum=df_sum.groupby(['姓名','人事晋升周期'])['教学总分'].agg('sum').reset_index()
+        df=df.merge(df_sum,on=['姓名','人事晋升周期'],how='left')
+        df=df.groupby(['姓名','专业类别','当前职级', '拟晋职级', '聘任年度','实算年数', '所需分数'], dropna=False)['教学总分'].agg('sum').reset_index()
+        df['达标情况']=np.where(df['教学总分']-df['所需分数']>=0,'','不达标')
+        # ----------------生成EXCLE表格-------------------------
+        wb = xl.load_workbook(self.path9_6)
+        ws = wb.worksheets[2]
+        ws.delete_rows(2, ws.max_row)
+        # ws1.append(list1)
+        # 将df_roster转换为类似元组的对象。
+        df_tuples = df.itertuples(index=False)
+        for row in df_tuples:
+            ws.append(list(row))
+        wb.save(self.path9_6)
+        print('\n\n===================   注意：输出的工作表，可通过“达标分数进行排序”   ===================\n')
+
+# #-------------------------用于核对数据------------------------------
+# Output().output_course_check()#输出3_2核对结果，如果有课程未归入教研室，应完善
+# Output().output_miss_hour()#输出学校可能漏发补贴的课时
+#
+# # #-------------------------输出：教学积分或课时全汇总------------------------------
+# Output().output_excel_01#输出“教学积分汇总”的EXCEL表
+# Output().output_term_hour()#输出各学期课时汇总（全部课时）
+# Output().output_section_hour(202301,202302)#输出各科室年度授课学时（全部课时）
+#
+# #-------------------------输出：（晋升）教学总分汇总------------------------------
+# Output().output_excel_02()#输出表“0_2、0_2、晋升-（詹忆君统计）理论教学总分汇总”的EXCEL表
+# Output().promote_Annual_Summary()#输出表“9-5、晋升-分年度汇总”的EXCEL表
+# Output().outputExcel_promote_result()#输出表“9-6、晋升名单及结果统计”的EXCEL表
+
+# #-------------------------输出:个人积分+认定课时+晋升教学总分汇总------------------------------
+name='林连城'
+Output().outputExcel_personal(name)#输出 “个人积分+认定课时+晋升教学总分汇总” 的EXCEL表
+# Output().output_personal_hour(name)#输出个人课时汇总（认定课时）
+# Output().output_personal_score(name)#输出个人教学积分汇总
